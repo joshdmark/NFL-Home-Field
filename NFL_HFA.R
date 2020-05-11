@@ -152,7 +152,7 @@ fwrite(all_games, 'Desktop/SPORTS/NFL_HFA_outputs/all_games.csv')
 # NE has been good regardless of location. 58% ATS at home AND away. On to Cincinnati. 
 
 ## sample plots
-cover_pcts %>% 
+cover_pcts_all %>% 
   ggplot() + 
   geom_col(aes(team_id, Home), size = 2, fill = 'dodgerblue') + 
   geom_col(aes(team_id, Away), size = 1, fill = 'grey', alpha = .5) + 
@@ -163,3 +163,100 @@ cover_pcts_all %>%
   geom_point(aes(Home, Away)) + 
   geom_label(aes(Home, Away, label = team_id, fill = team_id)) + 
   theme(legend.position = 'none')
+
+##
+results <- season_results %>% 
+  group_by(team_id, location) %>% 
+  mutate(team_total_covers = sum(cover_ind*games), 
+         team_total_games = sum(games), 
+         team_lifetime_cover_sd = sd(cover_ind * games)) %>% 
+  ungroup() %>% 
+  mutate(team_lifetime_cover_pct = team_total_covers / team_total_games, 
+         games_covered = cover_ind * games, 
+         games_covered = ifelse(cover_ind == 0, NA, games_covered)) %>% 
+  data.frame()
+
+## team lifetime averages
+team_lifetime_avgs <- results %>% 
+  group_by(team_id, location, team_lifetime_cover_pct, team_lifetime_cover_sd) %>% 
+  summarise(team_lifetime_avg_covers = mean(games_covered, na.rm = TRUE))
+  distinct()
+
+## list of 32 team_ids
+teams_df <- team_lifetime_avgs[, 'team_id'] %>% data.frame() %>% unique() %>% select(team_id = 1) %>% arrange(team_id)
+team_full_results <- data.frame()
+## loop for team results by season compared to lifetime averages
+for (team in teams_df$team_id){
+  # filter to individual team
+  team_results <- results %>% filter(team_id == team)
+  # print(dim(team_results))
+  single_team_results <- team_results %>% 
+    group_by(season, location) %>% 
+    summarise(games_played = sum(games, na.rm = TRUE), 
+              games_covered = sum(games_covered, na.rm = TRUE)) %>% 
+    mutate(season_cover_pct = games_covered / games_played, 
+           team_id = team) %>% data.table() %>% 
+    merge(team_lifetime_avgs, by = c('team_id', 'location'), all.x = TRUE) %>% 
+    data.frame() %>% 
+    mutate(within_5_pct = as.numeric(between(season_cover_pct, 
+                                  lower = team_lifetime_cover_pct - .05,
+                                  upper = team_lifetime_cover_pct + .05)), 
+           within_10_pct = as.numeric(between(season_cover_pct, 
+                                             lower = team_lifetime_cover_pct - .1,
+                                             upper = team_lifetime_cover_pct + .1)), 
+           within_1sd = as.numeric(between(season_cover_pct, 
+                                           lower = team_lifetime_cover_pct - team_lifetime_cover_sd,
+                                           upper = team_lifetime_cover_pct + team_lifetime_cover_sd)),
+           within_2sd = as.numeric(between(season_cover_pct, 
+                                           lower = team_lifetime_cover_pct - 2*team_lifetime_cover_sd,
+                                           upper = team_lifetime_cover_pct + 2*team_lifetime_cover_sd)), 
+           within_1g_avg = as.numeric(between(games_covered,
+                                              lower = team_lifetime_avg_covers - 1,
+                                              upper = team_lifetime_avg_covers + 1)),
+           within_2g_avg = as.numeric(between(games_covered,
+                                              lower = team_lifetime_avg_covers - 2,
+                                              upper = team_lifetime_avg_covers + 2)), 
+           within_3g_avg = as.numeric(between(games_covered,
+                                              lower = team_lifetime_avg_covers - 3,
+                                              upper = team_lifetime_avg_covers + 3)))
+  team_full_results <- suppressWarnings(bind_rows(team_full_results, single_team_results)) 
+}
+
+## by team - how often are they within 5 (or 10) pct points of their career averages?
+team_perf_vs_lifetime <- team_full_results %>% 
+  group_by(team_id, location) %>% 
+  summarise(within_5_pct = sum(within_5_pct), 
+            within_10_pct = sum(within_10_pct), 
+            within_1_g = sum(within_1g_avg), 
+            within_2_g = sum(within_2g_avg), 
+            within_3_g = sum(within_3g_avg),
+            seasons = n()) %>% 
+  mutate(pct_win_5pct = within_5_pct / seasons, 
+         pct_win_10pct = within_10_pct / seasons, 
+         pct_win_1gm = within_1_g / seasons, 
+         pct_win_2gm = within_2_g / seasons, 
+         pct_win_3gm = within_3_g / seasons) %>% data.frame()
+
+## team results overall
+team_perf_vs_lifetime %>% 
+  group_by(location) %>% 
+  summarise(teams_win_5pct = sum(within_5_pct), 
+            teams_win_10pct = sum(within_10_pct),
+            teams_win_1gm = sum(within_1_g),
+            teams_win_2gm = sum(within_2_g),
+            teams_win_3gm = sum(within_3_g),
+            seasons = sum(seasons)) %>% 
+  mutate(win_5_pct = teams_win_5pct / seasons, 
+         win_10_pct = teams_win_10pct / seasons, 
+         win_1gm = teams_win_1gm / seasons, 
+         win_2gm = teams_win_2gm / seasons, 
+         win_3gm = teams_win_3gm / seasons) %>% 
+  data.frame()
+
+
+p1 <- tmp %>% 
+  select(team_id, location, team_lifetime_cover_pct) %>% 
+  distinct() %>% 
+  ggplot() + 
+  geom_point(aes(team_id, team_lifetime_cover_pct, col = location))
+# plotly::ggplotly(p1)
